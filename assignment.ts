@@ -21,6 +21,12 @@ class FileSharing {
     registerUser(req: Request, res: Response): void {
         const { username } = req.body;
 
+        // Check if the username already exists
+        if (this.users.some(user => user.username === username)) {
+            res.status(400).json({ error: "Username already exists" });
+            return;
+        }
+
         const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
             modulusLength: 2048,
             publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -32,28 +38,49 @@ class FileSharing {
     }
 
     createEncrypt(req: Request, res: Response): void {
-        const { content } = req.body;
+        const { content, username } = req.body;
 
-        const user = this.users[0];
+        const user = this.users.find(user => user.username === username);
+
+        if (!user) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
 
         const encryptedContent = crypto.publicEncrypt(user.publicKey, Buffer.from(content, 'utf-8')).toString('base64');
 
         const result = crypto.randomBytes(16).toString('hex');
         this.files.push({ filename: result, content: encryptedContent, access: [user.username] });
-        res.json({ message: "File created successfully" });
+        res.json({ message: "File created successfully", filename: result });
+    
     }
 
 
     addUser(req: Request, res: Response): void {
-        const { username } = req.body;
+        const { usertoadd,username, filename } = req.body;
 
-        this.files.forEach(file => {
-            if (!file.access.includes(username)) {
-                file.access.push(username);
-            }
-        });
+    const file = this.files.find(file => file.filename === filename);
+    if (!file) {
+         res.status(404).json({ error: "File not found" });
+         return;
+    }
 
-        res.json({ message: "User added successfully" });
+    const owner = this.users.find(user => user.username === file.access[0]);
+    if (!owner) {
+        res.status(404).json({ error: "Owner not found" });
+        return;
+    }
+
+    if (owner.username !== req.body.username) {
+        res.status(403).json({ error: "User is not the owner of the file" });
+        return
+    }
+
+    if (!file.access.includes(usertoadd)) {
+        file.access.push(usertoadd);
+    }
+
+    res.json({ message: "User added successfully" });
     }
 
 
@@ -67,13 +94,11 @@ class FileSharing {
             return;
         }
 
-
         const user = this.users.find(user => user.username === username);
         if (!user) {
             res.status(404).json({ error: "User not found" });
-            return;
+            return
         }
-
 
         const decryptedContent = crypto.privateDecrypt(user.privateKey, Buffer.from(file.content, 'base64')).toString('utf-8');
         res.json({ content: decryptedContent });
@@ -81,7 +106,24 @@ class FileSharing {
 
 
     viewfiles(req: Request, res: Response): void {
-        res.json({ files: this.files });
+        const { username } = req.body;
+    
+        // Check if the user exists
+        const user = this.users.find(user => user.username === username);
+        if (!user) {
+             res.status(404).json({ error: "User not found" });
+             return;
+        }
+    
+        // Map files to include decrypted content if user has access, "Access denied" otherwise
+        const decryptedFiles = this.files.map(file => ({
+            filename: file.filename,
+            content: file.access.includes(username) ?
+                crypto.privateDecrypt(user.privateKey, Buffer.from(file.content, 'base64')).toString('utf-8') :
+                "Access denied"
+        }));
+    
+        res.json({ files: decryptedFiles });
     }
 }
 
@@ -96,8 +138,8 @@ app.use(express.json());
 app.post('/register', (req, res) => file.registerUser(req, res));
 app.post('/create', (req, res) => file.createEncrypt(req, res));
 app.post('/addUser', (req, res) => file.addUser(req, res));
-app.get('/dec', (req, res) => file.decrypted(req, res));
-app.get('/viewAll', (req, res) => file.viewfiles(req, res));
+app.post('/dec', (req, res) => file.decrypted(req, res));
+app.post('/viewAll', (req, res) => file.viewfiles(req, res));
 
 
 
